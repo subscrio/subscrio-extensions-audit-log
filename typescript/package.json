@@ -1,6 +1,6 @@
 {
   "name": "subscrio-audit-log",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Audit log extension for Subscrio — records customer, subscription, and Stripe mutations via after-hooks",
   "author": "Subscrio Team",
   "license": "MIT",
