@@ -39,9 +39,10 @@ public static class ResolveStripeEntities
         {
             await using var cmd = new NpgsqlCommand(
                 """
-                SELECT id, key, customer_id
-                FROM subscrio.subscriptions
-                WHERE stripe_subscription_id = @stripeSubId
+                SELECT s.id, s.key, c.id, c.key
+                FROM subscrio.subscriptions s
+                JOIN subscrio.customers c ON c.id = s.customer_id
+                WHERE s.stripe_subscription_id = @stripeSubId
                 LIMIT 1
                 """,
                 conn);
@@ -52,6 +53,7 @@ public static class ResolveStripeEntities
                 subscriptionId = reader.GetInt64(0);
                 subscriptionKey = reader.GetString(1);
                 customerId = reader.GetInt64(2);
+                customerKey = reader.GetString(3);
             }
         }
 

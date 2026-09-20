@@ -40,6 +40,11 @@ public sealed class AuditLog : IAsyncDisposable
         async Task WriteStripe(StripeReceivedHookEvent evt, CancellationToken ct)
         {
             var refs = ExtractStripeEntityRefs.FromEvent(evt.Data);
+            refs = new StripeEntityRefs
+            {
+                StripeCustomerId = evt.StripeCustomerId ?? refs.StripeCustomerId,
+                StripeSubscriptionId = evt.StripeSubscriptionId ?? refs.StripeSubscriptionId
+            };
             var association = await ResolveStripeEntities.ResolveAsync(_dataSource, refs, ct);
             await _repository.InsertAsync(
                 MapHookEvent.MapStripeReceivedAfterEvent(evt, association, refs),

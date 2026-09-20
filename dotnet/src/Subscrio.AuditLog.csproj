@@ -10,7 +10,7 @@
 
   <PropertyGroup>
     <PackageId>Subscrio.AuditLog</PackageId>
-    <Version>0.3.1</Version>
+    <Version>0.4.0</Version>
     <Authors>Subscrio</Authors>
     <Description>Audit log extension for Subscrio.Core. Registers after-hooks and stores transaction rows in PostgreSQL.</Description>
     <PackageTags>subscrio;audit;logging;postgresql</PackageTags>
@@ -22,7 +22,11 @@
     <NoWarn>$(NoWarn);1591</NoWarn>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <Deterministic>true</Deterministic>
+    <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
   </PropertyGroup>
 
   <ItemGroup>

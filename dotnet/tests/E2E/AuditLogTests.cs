@@ -2,6 +2,7 @@ using FluentAssertions;
 using Npgsql;
 using Stripe;
 using Subscrio.AuditLog.DTOs;
+using Subscrio.AuditLog.Mapping;
 using Subscrio.AuditLog.Schema;
 using Subscrio.AuditLog.Tests.Setup;
 using Subscrio.Core.Application.DTOs;
@@ -215,6 +216,10 @@ public class AuditLogTests : IAsyncLifetime
             Type = EventTypes.CustomerSubscriptionCreated,
             Data = new EventData { Object = stripeSub }
         };
+
+        var stripeRefs = ExtractStripeEntityRefs.FromEvent(stripeEvent);
+        stripeRefs.StripeCustomerId.Should().Be(stripeCustomerId);
+        stripeRefs.StripeSubscriptionId.Should().Be(stripeSubId);
 
         await _ctx.Subscrio.Stripe.ProcessStripeEventAsync(stripeEvent);
 
