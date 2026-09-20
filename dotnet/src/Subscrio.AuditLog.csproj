@@ -10,7 +10,7 @@
 
   <PropertyGroup>
     <PackageId>Subscrio.AuditLog</PackageId>
-    <Version>1.0.4</Version>
+    <Version>0.3.1</Version>
     <Authors>Subscrio</Authors>
     <Description>Audit log extension for Subscrio.Core. Registers after-hooks and stores transaction rows in PostgreSQL.</Description>
     <PackageTags>subscrio;audit;logging;postgresql</PackageTags>
