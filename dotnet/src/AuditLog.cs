@@ -51,6 +51,32 @@ public sealed class AuditLog : IAsyncDisposable
                 ct);
         }
 
+        async Task WriteAccounting(AccountingMutationHookEvent evt, CancellationToken ct)
+        {
+            var subscriptionKey = evt.Input["subscriptionKey"]?.GetValue<string>();
+            var subscription = subscriptionKey == null ? null : await subscrio.Subscriptions.GetSubscriptionAsync(subscriptionKey);
+            var customerKey = evt.Input["customerKey"]?.GetValue<string>() ?? subscription?.CustomerKey;
+            await _repository.InsertAsync(new()
+            {
+                Source = evt.Source,
+                Action = evt.Type.Split('.')[1],
+                EntityType = evt.Type.Split('.')[0],
+                EntityKey = evt.Input["idempotencyKey"]?.GetValue<string>() ?? subscriptionKey,
+                CustomerKey = customerKey,
+                SubscriptionKey = subscriptionKey,
+                Summary = evt.Type,
+                PostValue = evt.Result.HasValue
+                    ? System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object?>>(evt.Result.Value.GetRawText())
+                    : null,
+                Metadata = new() { ["hookType"] = evt.Type, ["input"] = evt.Input }
+            }, ct);
+        }
+        _unsubscribers.Add(subscrio.Hooks.OnSubscriptionAddonAttachedAfter(WriteAccounting));
+        _unsubscribers.Add(subscrio.Hooks.OnSubscriptionAddonDetachedAfter(WriteAccounting));
+        _unsubscribers.Add(subscrio.Hooks.OnUsageReportedAfter(WriteAccounting));
+        _unsubscribers.Add(subscrio.Hooks.OnCreditConsumedAfter(WriteAccounting));
+        _unsubscribers.Add(subscrio.Hooks.OnCreditGrantedAfter(WriteAccounting));
+        _unsubscribers.Add(subscrio.Hooks.OnCreditAdjustedAfter(WriteAccounting));
         _unsubscribers.Add(subscrio.Hooks.OnCustomerCreatedAfter(WriteCustomer));
         _unsubscribers.Add(subscrio.Hooks.OnCustomerUpdatedAfter(WriteCustomer));
         _unsubscribers.Add(subscrio.Hooks.OnCustomerArchivedAfter(WriteCustomer));
