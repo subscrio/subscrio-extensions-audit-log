@@ -3,6 +3,7 @@ import type { Subscrio } from 'subscrio';
 import {
   HookEvents,
   type CustomerMutationHookEvent,
+  type AccountingMutationHookEvent,
   type StripeReceivedHookEvent,
   type SubscriptionMutationHookEvent,
 } from 'subscrio';
@@ -71,7 +72,32 @@ export function createAuditLog(subscrio: Subscrio, options: AuditLogOptions): Au
     );
   };
 
+  const writeAccounting = async (event: AccountingMutationHookEvent) => {
+    const subscriptionKey = typeof event.input.subscriptionKey === 'string' ? event.input.subscriptionKey : null;
+    const subscription = subscriptionKey ? await subscrio.subscriptions.getSubscription(subscriptionKey) : null;
+    const customerKey = typeof event.input.customerKey === 'string' ? event.input.customerKey : subscription?.customerKey ?? null;
+    await repository.insert({
+      source: event.source,
+      action: event.type.split('.')[1],
+      entityType: event.type.split('.')[0],
+      entityKey: typeof event.input.idempotencyKey === 'string' ? event.input.idempotencyKey : subscriptionKey,
+      customerKey,
+      subscriptionKey,
+      summary: event.type,
+      preValue: null,
+      postValue: event.result,
+      metadata: { hookType: event.type, input: event.input },
+    });
+  };
   unsubscribers.push(
+    ...[
+      HookEvents.SubscriptionAddonAttachedAfter,
+      HookEvents.SubscriptionAddonDetachedAfter,
+      HookEvents.UsageReportedAfter,
+      HookEvents.CreditConsumedAfter,
+      HookEvents.CreditGrantedAfter,
+      HookEvents.CreditAdjustedAfter,
+    ].map(name => subscrio.hooks.on(name, writeAccounting)),
     subscrio.hooks.on(HookEvents.CustomerCreatedAfter, writeCustomer),
     subscrio.hooks.on(HookEvents.CustomerUpdatedAfter, writeCustomer),
     subscrio.hooks.on(HookEvents.CustomerArchivedAfter, writeCustomer),

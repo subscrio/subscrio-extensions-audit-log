@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
-import { OverrideType, type Subscrio } from 'subscrio';
+import { HookEvents, OverrideType, type Subscrio } from 'subscrio';
+import { AUDIT_AFTER_EVENTS } from '../../src/mapHookEvent.js';
 import {
   createAuditLog,
   AUDIT_LOG_SCHEMA_VERSION,
@@ -65,6 +66,73 @@ describe('Audit Log E2E', () => {
 
     const migrated = await audit.migrate();
     expect(migrated).toBe(0);
+  });
+
+  test('the supported audit events cover every core after-hook', () => {
+    expect([...AUDIT_AFTER_EVENTS].sort()).toEqual(
+      Object.values(HookEvents).filter(name => name.endsWith('.after')).sort()
+    );
+  });
+
+  test('add-on and usage hooks preserve associations and audit only committed usage', async () => {
+    await audit.installSchema();
+    const { product, plan, cycle, customer } = await createSubscriptionFixture();
+    const featureKey = unique('requests');
+    await subscrio.features.createFeature({
+      key: featureKey, displayName: 'Requests', valueType: 'metered', defaultValue: '20',
+      meteredConfig: { resetPeriod: 'monthly', enforcement: 'hard', aggregation: 'sum', usageScope: 'subscription' },
+    });
+    await subscrio.products.associateFeature(product.key, featureKey, { addonRule: 'additive' });
+    await subscrio.plans.setFeatureValue(plan.key, featureKey, '20');
+    const subscription = await subscrio.subscriptions.createSubscription({
+      key: unique('sub'), customerKey: customer.key, billingCycleKey: cycle.key,
+      activationDate: new Date().toISOString(),
+    });
+    const addon = await subscrio.addons.createAddon({
+      key: unique('extra'), productKey: product.key, displayName: 'Extra requests',
+      featureValues: { [featureKey]: '5' },
+    });
+    await subscrio.subscriptions.attachAddon(subscription.key, addon.key, 2);
+    await subscrio.subscriptions.detachAddon(subscription.key, addon.key);
+    const options = { subscriptionKey: subscription.key, idempotencyKey: 'usage-1' };
+    await subscrio.metering.reportUsage(customer.key, product.key, featureKey, 2, options);
+    await subscrio.metering.reportUsage(customer.key, product.key, featureKey, 2, options);
+    const off = subscrio.hooks.on(HookEvents.UsageReportedBefore, () => { throw new Error('Veto usage'); });
+    try {
+      await expect(subscrio.metering.reportUsage(customer.key, product.key, featureKey, 1,
+        { ...options, idempotencyKey: 'rejected' })).rejects.toThrow('Veto usage');
+    } finally { off(); }
+    expect((await subscrio.metering.getUsage(customer.key, product.key, featureKey,
+      { subscriptionKey: subscription.key })).consumed).toBe(2);
+    const rows = (await audit.list({ customerKey: customer.key })).data;
+    for (const hook of [HookEvents.SubscriptionAddonAttachedAfter, HookEvents.SubscriptionAddonDetachedAfter, HookEvents.UsageReportedAfter]) {
+      const matching = rows.filter(row => row.metadata?.hookType === hook);
+      expect(matching).toHaveLength(1);
+      expect(matching[0].subscriptionKey).toBe(subscription.key);
+      expect(matching[0].source).toBe('api');
+      expect(matching[0].postValue).not.toBeNull();
+    }
+    expect(rows.find(row => row.metadata?.hookType === HookEvents.SubscriptionAddonAttachedAfter)?.metadata?.input)
+      .toMatchObject({ addonKey: addon.key, quantity: 2 });
+    const expiresAt = new Date(Date.now() + 3_600_000).toISOString();
+    await subscrio.subscriptions.addFeatureOverride(subscription.key, featureKey, '30', OverrideType.Timed, expiresAt);
+    const overrides = (await audit.list({ customerKey: customer.key, action: 'feature_override' })).data;
+    expect(overrides).toHaveLength(1);
+    expect(overrides[0].metadata?.expiresAt).toBe(expiresAt);
+  });
+
+  test('credit adjustment is audited once and keeps its reason and balance', async () => {
+    await audit.installSchema();
+    const customerKey = unique('adjust-customer'), currencyKey = unique('adjust-currency');
+    await subscrio.customers.createCustomer({ key: customerKey });
+    await subscrio.credits.createCurrency({ key: currencyKey, displayName: 'Credits' });
+    const input = { customerKey, currencyKey, amount: 10, reason: 'Support credit', idempotencyKey: 'adjust-1' };
+    await subscrio.credits.adjust(input);
+    await subscrio.credits.adjust(input);
+    const rows = (await audit.list({ customerKey })).data.filter(row => row.metadata?.hookType === HookEvents.CreditAdjustedAfter);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].metadata?.input).toMatchObject({ reason: 'Support credit', amount: 10 });
+    expect(rows[0].postValue).toMatchObject({ currencyKey, available: 10 });
   });
 
   test('customer create and update write audit rows', async () => {
@@ -304,4 +372,6 @@ describe('Audit Log E2E', () => {
     // Restore table so afterAll dispose / other cleanup is clean
     await audit.installSchema();
   });
+
+ test('credit after-events are audited once across an idempotent retry',async()=>{await audit.installSchema();const c=unique('credit-customer'),cu=unique('currency'),f=unique('action');await subscrio.customers.createCustomer({key:c});await subscrio.features.createFeature({key:f,displayName:f,valueType:'toggle',defaultValue:'true'});await subscrio.credits.createCurrency({key:cu,displayName:cu});await subscrio.credits.setConsumptionRule(f,cu,2);await subscrio.credits.grant({customerKey:c,currencyKey:cu,amount:10,grantType:'prepaid',idempotencyKey:'grant'});const input={customerKey:c,featureKey:f,units:2,idempotencyKey:'consume'};await subscrio.credits.consume(input);await subscrio.credits.consume(input);const rows=(await audit.list({customerKey:c})).data;expect(rows.filter(r=>r.metadata?.hookType==='credit.consumed.after')).toHaveLength(1);expect(rows.filter(r=>r.metadata?.hookType==='credit.granted.after')).toHaveLength(1);});
 });

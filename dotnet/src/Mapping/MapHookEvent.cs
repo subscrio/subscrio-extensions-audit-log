@@ -50,6 +50,7 @@ public static class MapHookEvent
         if (evt.FeatureKey != null) metadata["featureKey"] = evt.FeatureKey;
         if (evt.Value != null) metadata["value"] = evt.Value;
         if (evt.OverrideType != null) metadata["overrideType"] = evt.OverrideType;
+        if (evt.ExpiresAt != null) metadata["expiresAt"] = evt.ExpiresAt;
 
         return new InsertTransactionLogInput
         {

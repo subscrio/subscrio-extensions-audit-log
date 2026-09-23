@@ -83,6 +83,7 @@ export function mapSubscriptionAfterEvent(
   if (event.featureKey !== undefined) metadata.featureKey = event.featureKey;
   if (event.value !== undefined) metadata.value = event.value;
   if (event.overrideType !== undefined) metadata.overrideType = event.overrideType;
+  if (event.expiresAt !== undefined) metadata.expiresAt = event.expiresAt;
 
   return {
     source: event.source,
@@ -148,6 +149,12 @@ export function mapStripeReceivedAfterEvent(
 
 /** All after-hook event names the audit log registers */
 export const AUDIT_AFTER_EVENTS = [
+  HookEvents.SubscriptionAddonAttachedAfter,
+  HookEvents.SubscriptionAddonDetachedAfter,
+  HookEvents.UsageReportedAfter,
+  HookEvents.CreditConsumedAfter,
+  HookEvents.CreditGrantedAfter,
+  HookEvents.CreditAdjustedAfter,
   HookEvents.CustomerCreatedAfter,
   HookEvents.CustomerUpdatedAfter,
   HookEvents.CustomerArchivedAfter,

@@ -6,6 +6,7 @@ using Subscrio.AuditLog.Mapping;
 using Subscrio.AuditLog.Schema;
 using Subscrio.AuditLog.Tests.Setup;
 using Subscrio.Core.Application.DTOs;
+using Subscrio.Core.Application.Hooks;
 using Subscrio.Core.Domain.ValueObjects;
 using Xunit;
 
@@ -111,6 +112,75 @@ public class AuditLogTests : IAsyncLifetime
         var fetched = await _audit.GetAsync(createRow.Id);
         fetched!.Id.Should().Be(createRow.Id);
         fetched.CustomerKey.Should().Be(key);
+    }
+
+    [Fact]
+    public async Task AddonAndUsageHooks_AuditCommittedOperationsWithAssociations()
+    {
+        await _audit.InstallSchemaAsync();
+        var app = _ctx.Subscrio;
+        var (product, plan, cycle, customer) = await CreateSubscriptionFixtureAsync();
+        var featureKey = Unique("requests");
+        await app.Features.CreateFeatureAsync(new(featureKey, "Requests", "metered", "20",
+            MeteredConfig: new("monthly", "hard", "sum", "subscription")));
+        await app.Products.AssociateFeatureAsync(product.Key, featureKey, new(AddonRule: "additive"));
+        await app.Plans.SetFeatureValueAsync(plan.Key, featureKey, "20");
+        var subscription = await app.Subscriptions.CreateSubscriptionAsync(new(Unique("sub"), customer.Key,
+            cycle.Key, ActivationDate: DateTime.UtcNow));
+        var addon = await app.Addons.CreateAddonAsync(new(Unique("extra"), product.Key, "Extra requests",
+            FeatureValues: new() { [featureKey] = "5" }));
+        await app.Subscriptions.AttachAddonAsync(subscription.Key, addon.Key, 2);
+        await app.Subscriptions.DetachAddonAsync(subscription.Key, addon.Key);
+        var options = new UsageReportOptions("usage-1", subscription.Key);
+        await app.Metering.ReportUsageAsync(customer.Key, product.Key, featureKey, 2, options);
+        await app.Metering.ReportUsageAsync(customer.Key, product.Key, featureKey, 2, options);
+        var off = app.Hooks.OnUsageReportedBefore((_, _) => throw new InvalidOperationException("Veto usage"));
+        try
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(() => app.Metering.ReportUsageAsync(
+                customer.Key, product.Key, featureKey, 1, new("rejected", subscription.Key)));
+        }
+        finally { off(); }
+        Assert.Equal(2, (await app.Metering.GetUsageAsync(customer.Key, product.Key, featureKey,
+            new(SubscriptionKey: subscription.Key))).Consumed);
+        var rows = (await _audit.ListAsync(new() { CustomerKey = customer.Key })).Data;
+        foreach (var hook in new[] { HookEvents.SubscriptionAddonAttachedAfter, HookEvents.SubscriptionAddonDetachedAfter, HookEvents.UsageReportedAfter })
+        {
+            var row = Assert.Single(rows, r => r.Summary == hook);
+            Assert.Equal(subscription.Key, row.SubscriptionKey);
+            Assert.Equal("api", row.Source);
+            Assert.NotNull(row.PostValue);
+        }
+        var attached = rows.Single(r => r.Summary == HookEvents.SubscriptionAddonAttachedAfter);
+        var input = System.Text.Json.JsonSerializer.SerializeToElement(attached.Metadata!["input"]);
+        Assert.Equal(addon.Key, input.GetProperty("addonKey").GetString());
+        Assert.Equal(2, input.GetProperty("quantity").GetInt32());
+        var expiresAt = DateTime.UtcNow.AddHours(1);
+        await app.Subscriptions.AddFeatureOverrideAsync(subscription.Key, featureKey, "30", OverrideType.Timed, expiresAt);
+        var overrideRow = Assert.Single((await _audit.ListAsync(new() { CustomerKey = customer.Key })).Data,
+            r => r.Action == "feature_override");
+        Assert.Equal(expiresAt, DateTime.Parse(overrideRow.Metadata!["expiresAt"]!.ToString()!).ToUniversalTime());
+    }
+
+    [Fact]
+    public async Task CreditAdjustment_AuditsOnceWithReasonAndBalance()
+    {
+        await _audit.InstallSchemaAsync();
+        var app = _ctx.Subscrio;
+        var customerKey = Unique("adjust-customer");
+        var currencyKey = Unique("adjust-currency");
+        await app.Customers.CreateCustomerAsync(new(customerKey));
+        await app.Credits.CreateCurrencyAsync(new(currencyKey, "Credits"));
+        var input = new CreditAdjustInput(customerKey, currencyKey, 10, "Support credit", "adjust-1");
+        await app.Credits.AdjustAsync(input);
+        await app.Credits.AdjustAsync(input);
+        var row = Assert.Single((await _audit.ListAsync(new() { CustomerKey = customerKey })).Data,
+            r => r.Summary == "credit.adjusted.after");
+        var metadata = System.Text.Json.JsonSerializer.SerializeToElement(row.Metadata!["input"]);
+        Assert.Equal("Support credit", metadata.GetProperty("reason").GetString());
+        var result = System.Text.Json.JsonSerializer.SerializeToElement(row.PostValue);
+        Assert.Equal(currencyKey, result.GetProperty("currencyKey").GetString());
+        Assert.Equal(10, result.GetProperty("available").GetInt64());
     }
 
     [Fact]
@@ -323,4 +393,6 @@ public class AuditLogTests : IAsyncLifetime
 
         await _audit.InstallSchemaAsync();
     }
+
+    [Fact] public async Task CreditAfterEventsAuditOnceAcrossRetry(){await _audit.InstallSchemaAsync();var c=Unique("credits-customer");var cu=Unique("currency");var f=Unique("action");var app=_ctx.Subscrio;await app.Customers.CreateCustomerAsync(new(c));await app.Features.CreateFeatureAsync(new(f,f,"toggle","true"));await app.Credits.CreateCurrencyAsync(new(cu,cu));await app.Credits.SetConsumptionRuleAsync(f,cu,2);await app.Credits.GrantAsync(new(c,cu,10,"prepaid","grant"));var input=new CreditConsumeInput(c,f,2,"consume");await app.Credits.ConsumeAsync(input);await app.Credits.ConsumeAsync(input);var rows=(await _audit.ListAsync(new(){CustomerKey=c})).Data;Assert.Single(rows,r=>r.Summary=="credit.consumed.after");Assert.Single(rows,r=>r.Summary=="credit.granted.after");}
 }
